@@ -163,6 +163,8 @@ class HamRadioLogger(tk.Tk):
         self.entries = []
         self.file_path = None
         self.active_cell_edit = None
+        self.sort_column = None  # display-only sort; None = log (chronological) order
+        self.sort_descending = False
 
         # Initialize UI
         self.setup_ui()
@@ -306,8 +308,12 @@ class HamRadioLogger(tk.Tk):
             ("dupe", "Dupe", 50),
         ]
 
+        self.column_titles = {}
         for col_id, col_name, col_width in column_config:
-            self.history_tree.heading(col_id, text=col_name)
+            self.column_titles[col_id] = col_name
+            self.history_tree.heading(
+                col_id, text=col_name, command=lambda c=col_id: self.sort_history_by(c)
+            )
             self.history_tree.column(col_id, width=col_width, anchor="center")
 
         tree_scroll_y = ttk.Scrollbar(
@@ -650,8 +656,9 @@ class HamRadioLogger(tk.Tk):
     def delete_selected_entry(self):
         selected = self.history_tree.selection()
         if selected:
-            for item in selected:
-                index = int(item)
+            # Delete highest index first so earlier deletions don't shift
+            # the positions of rows still waiting to be deleted.
+            for index in sorted((int(item) for item in selected), reverse=True):
                 if index < len(self.entries):
                     del self.entries[index]
                     self.unsaved_changes = True
@@ -733,9 +740,31 @@ class HamRadioLogger(tk.Tk):
         # Clear existing entries in the tree
         self.history_tree.delete(*self.history_tree.get_children())
 
-        # Insert each entry
-        for index, entry in enumerate(self.entries):
-            row_tag = "even" if index % 2 == 0 else "odd"
+        # Row iids stay as the entry's index in self.entries (editing and
+        # deleting rely on that); a heading sort only changes display order.
+        order = list(range(len(self.entries)))
+        if self.sort_column:
+            numeric = self.sort_column in ("distance", "distance_points", "unique")
+
+            def sort_key(index):
+                entry = self.entries[index]
+                if self.sort_column in ("date", "time"):
+                    # A time is only meaningful alongside its date, so both
+                    # headings sort by the full date+time.
+                    return (entry["date"], entry["time"])
+                value = entry.get(self.sort_column, "")
+                if numeric:
+                    try:
+                        return float(value)
+                    except (TypeError, ValueError):
+                        return 0.0
+                return str(value)
+
+            order.sort(key=sort_key, reverse=self.sort_descending)
+
+        for position, index in enumerate(order):
+            entry = self.entries[index]
+            row_tag = "even" if position % 2 == 0 else "odd"
             self.history_tree.insert(
                 "",
                 "end",
@@ -756,9 +785,24 @@ class HamRadioLogger(tk.Tk):
                 tags=(row_tag,),
             )
 
-        # Scroll to the bottom to show the most recent entry
+        # In log order, scroll to the bottom to show the most recent entry
         if self.entries:
-            self.history_tree.yview_moveto(1.0)
+            self.history_tree.yview_moveto(0.0 if self.sort_column else 1.0)
+
+    def sort_history_by(self, column):
+        # Each click on a heading cycles: ascending -> descending -> log order.
+        if column != self.sort_column:
+            self.sort_column, self.sort_descending = column, False
+        elif not self.sort_descending:
+            self.sort_descending = True
+        else:
+            self.sort_column, self.sort_descending = None, False
+
+        for col_id, title in self.column_titles.items():
+            if col_id == self.sort_column:
+                title += " ▼" if self.sort_descending else " ▲"
+            self.history_tree.heading(col_id, text=title)
+        self.update_history_tree()
 
     def calculate_distance(self, sent_grid, recv_grid):
         sent_coords = self.maidenhead_to_latlon(sent_grid)
