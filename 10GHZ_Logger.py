@@ -736,17 +736,21 @@ class HamRadioLogger(tk.Tk):
         frequency = self.frequency_entry.get()
 
         # Auto-correct missing punctuation (e.g. "20261011" -> "2026-10-11",
-        # "1234" -> "12:34") and reflect the correction back in the fields.
+        # "1234" -> "12:34") and capitalization, and reflect the corrections
+        # back in the fields that stay filled in for the next entry.
         date_value = normalize_date(self.date_entry.get().upper())
         time_value = normalize_time(self.time_entry.get().upper())
-        self.date_entry.delete(0, tk.END)
-        self.date_entry.insert(0, date_value)
-        self.time_entry.delete(0, tk.END)
-        self.time_entry.insert(0, time_value)
-
         callsign_value = self.callsign_entry.get().upper()
         sent_grid_value = self.sent_grid_entry.get().upper()
         recv_grid_value = self.recv_grid_entry.get().upper()
+        for entry, value in (
+            (self.date_entry, date_value),
+            (self.time_entry, time_value),
+            (self.sent_grid_entry, sent_grid_value),
+            (self.recv_grid_entry, recv_grid_value),
+        ):
+            entry.delete(0, tk.END)
+            entry.insert(0, value)
 
         # Calculate distance and distance points
         distance = int(self.calculate_distance(sent_grid_value, recv_grid_value))
