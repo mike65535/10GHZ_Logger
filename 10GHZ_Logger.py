@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import csv
+import json
 import os
 import re
 import sys
@@ -21,6 +22,11 @@ FREQUENCY_MULTIPLIERS = {
 }
 
 MODE_OPTIONS = ["CW", "SSB", "FM", "DIG"]
+
+# Cabrillo export: the log's band names already are Cabrillo band codes;
+# modes map to Cabrillo's own codes.
+CABRILLO_MODES = {"CW": "CW", "SSB": "PH", "FM": "FM", "DIG": "DG"}
+CABRILLO_SETTINGS_PATH = os.path.expanduser("~/.config/10ghz_logger/cabrillo.json")
 
 
 def normalize_date(value):
@@ -231,6 +237,148 @@ class HamRadioLogger(tk.Tk):
 
         self.recalculate_log()
 
+    def export_cabrillo(self):
+        if not self.entries:
+            messagebox.showinfo("Export Cabrillo", "The log is empty.")
+            return
+        header = self.ask_cabrillo_header()
+        if header is None:
+            return
+        default_name = (
+            os.path.splitext(os.path.basename(self.file_path))[0] + ".log"
+            if self.file_path
+            else f"{header['callsign']}.log"
+        )
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".log",
+            initialfile=default_name,
+            filetypes=[("Cabrillo Log", "*.log *.cbr"), ("All Files", "*")],
+        )
+        if not file_path:
+            return
+
+        # Make sure entries are normalized, chronological and scored.
+        self.recalculate_log()
+        callsign = header["callsign"]
+        lines = [
+            "START-OF-LOG: 3.0",
+            "CONTEST: ARRL-10-GHZ",
+            f"CALLSIGN: {callsign}",
+            f"CATEGORY-OPERATOR: {header['category_operator']}",
+            f"CATEGORY-STATION: {header['category_station']}",
+            f"CLAIMED-SCORE: {round(self.total_points())}",
+        ]
+        for tag, key in (
+            ("OPERATORS", "operators"),
+            ("LOCATION", "location"),
+            ("NAME", "name"),
+            ("EMAIL", "email"),
+        ):
+            if header[key]:
+                lines.append(f"{tag}: {header[key]}")
+        lines += [f"ADDRESS: {line}" for line in header["address"].splitlines() if line.strip()]
+        lines.append("CREATED-BY: 10GHZ_Logger")
+        for entry in self.entries:
+            lines.append(
+                "QSO: {:<5} {:<2} {} {:>4} {:<13} {:<6} {:<13} {:<6}".format(
+                    entry["frequency"],
+                    CABRILLO_MODES.get(entry["mode"], entry["mode"]),
+                    entry["date"],
+                    entry["time"].replace(":", ""),
+                    callsign,
+                    entry["sent_grid"],
+                    entry["callsign"],
+                    entry["recv_grid"],
+                ).rstrip()
+            )
+        lines.append("END-OF-LOG:")
+
+        with open(file_path, "w", newline="\r\n") as file:
+            file.write("\n".join(lines) + "\n")
+        messagebox.showinfo(
+            "Export Cabrillo", f"Wrote {len(self.entries)} QSOs to\n{file_path}"
+        )
+
+    def ask_cabrillo_header(self):
+        # Header fields, remembered between exports in CABRILLO_SETTINGS_PATH.
+        settings = {
+            "callsign": "N2MG",
+            "operators": "",
+            "category_operator": "SINGLE-OP",
+            "category_station": "FIXED",
+            "location": "",
+            "name": "",
+            "email": "",
+            "address": "",
+        }
+        try:
+            with open(CABRILLO_SETTINGS_PATH) as file:
+                settings.update(json.load(file))
+        except (OSError, ValueError):
+            pass
+
+        dialog = tk.Toplevel(self)
+        dialog.title("Export Cabrillo")
+        dialog.transient(self)
+        form = ttk.Frame(dialog, padding=10)
+        form.pack(fill=tk.BOTH, expand=True)
+        fields = [
+            ("callsign", "Callsign", None),
+            ("operators", "Operators (if multi-op)", None),
+            ("category_operator", "Category - Operator", ["SINGLE-OP", "MULTI-OP", "CHECKLOG"]),
+            ("category_station", "Category - Station", ["FIXED", "ROVER", "PORTABLE"]),
+            ("location", "ARRL/RAC Section", None),
+            ("name", "Name", None),
+            ("email", "Email", None),
+        ]
+        widgets = {}
+        for row, (key, label, options) in enumerate(fields):
+            ttk.Label(form, text=label).grid(row=row, column=0, sticky="w", pady=2)
+            if options:
+                widget = ttk.Combobox(form, values=options, state="readonly", width=30)
+                widget.set(settings[key] if settings[key] in options else options[0])
+            else:
+                widget = ttk.Entry(form, width=32)
+                widget.insert(0, settings[key])
+            widget.grid(row=row, column=1, sticky="we", pady=2)
+            widgets[key] = widget
+        ttk.Label(form, text="Address").grid(row=len(fields), column=0, sticky="nw", pady=2)
+        address = tk.Text(form, width=32, height=3)
+        address.insert("1.0", settings["address"])
+        address.grid(row=len(fields), column=1, sticky="we", pady=2)
+
+        result = {}
+
+        def accept(event=None):
+            values = {key: widget.get().strip() for key, widget in widgets.items()}
+            values["callsign"] = values["callsign"].upper()
+            values["operators"] = values["operators"].upper()
+            values["location"] = values["location"].upper()
+            values["address"] = address.get("1.0", tk.END).strip()
+            if not values["callsign"]:
+                messagebox.showwarning("Export Cabrillo", "Callsign is required.", parent=dialog)
+                return
+            result.update(values)
+            try:
+                os.makedirs(os.path.dirname(CABRILLO_SETTINGS_PATH), exist_ok=True)
+                with open(CABRILLO_SETTINGS_PATH, "w") as file:
+                    json.dump(values, file, indent=2)
+            except OSError:
+                pass  # remembering the header is a convenience, not required
+            dialog.destroy()
+
+        buttons = ttk.Frame(form)
+        buttons.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(buttons, text="Next...", command=accept).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT)
+        dialog.bind("<Escape>", lambda event: dialog.destroy())
+
+        dialog.wait_visibility()
+        dialog.grab_set()
+        widgets["callsign"].focus_set()
+        self.wait_window(dialog)
+        return result or None
+
     def recalculate_log(self):
         # Re-normalize every entry's text fields first, not just
         # freshly-typed ones -- a loaded CSV may have been hand-edited
@@ -292,6 +440,7 @@ class HamRadioLogger(tk.Tk):
         file_menu.add_command(label="Save", command=self.save_entries)
         file_menu.add_command(label="Save As...", command=self.save_entries_as)
         file_menu.add_command(label="Load", command=self.load_entries)
+        file_menu.add_command(label="Export Cabrillo...", command=self.export_cabrillo)
         file_menu.add_separator()
         file_menu.add_command(label="Recalculate", command=self.recalculate_log)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -466,25 +615,21 @@ class HamRadioLogger(tk.Tk):
         combo.set(options[0])
         return combo
 
-    def update_totals(self):
-        # Calculate total distance points by summing all valid distance points
+    def total_points(self):
+        # Distance points for every contact plus 100 for each unique
         total_distance_points = sum(
             float(entry["distance_points"])
             for entry in self.entries
             if entry["distance_points"]
         )
-
-        # Calculate total unique points by counting entries marked as unique ("100")
         total_unique_points = sum(
             100 for entry in self.entries if entry["unique"] == "100"
         )
+        return total_distance_points + total_unique_points
 
-        # Calculate combined total points
-        combined_total_points = total_distance_points + total_unique_points
-
-        # Update the combined total display label
+    def update_totals(self):
         self.total_points_label.config(
-            text=f"Total Points: {combined_total_points:.2f}"
+            text=f"Total Points: {self.total_points():.2f}"
         )
 
         self.update_qso_counts()
