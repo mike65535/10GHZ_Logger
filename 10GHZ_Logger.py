@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import csv
 import os
+import re
 import sys
 from datetime import datetime
 from geopy.distance import geodesic
@@ -23,15 +24,36 @@ MODE_OPTIONS = ["CW", "SSB", "FM", "DIG"]
 
 
 def normalize_date(value):
-    digits = value.replace("-", "").strip()
-    if "-" not in value and digits.isdigit() and len(digits) == 8:
+    # "2026-9-19" / "2026/09/19": split on the separators and zero-pad.
+    # "20260919" / "2026-0919": strip separators and slice 8 digits.
+    # Anything else is left as typed.
+    text = value.strip()
+    parts = re.split(r"[-/. ]+", text)
+    if (
+        len(parts) == 3
+        and all(part.isdigit() for part in parts)
+        and len(parts[0]) == 4
+        and all(1 <= len(part) <= 2 for part in parts[1:])
+    ):
+        return f"{parts[0]}-{parts[1].zfill(2)}-{parts[2].zfill(2)}"
+    digits = "".join(parts)
+    if digits.isdigit() and len(digits) == 8:
         return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}"
     return value
 
 
 def normalize_time(value):
-    digits = value.replace(":", "").strip()
-    if ":" not in value and digits.isdigit() and len(digits) in (3, 4):
+    # "1:23" / "12:3": split on the separator and zero-pad each part.
+    # "123" / "1234" / "12 34": strip separators and pad to 4 digits.
+    text = value.strip()
+    parts = re.split(r"[:.]+", text)
+    if (
+        len(parts) == 2
+        and all(part.isdigit() and 1 <= len(part) <= 2 for part in parts)
+    ):
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+    digits = re.sub(r"[:. ]", "", text)
+    if digits.isdigit() and len(digits) in (3, 4):
         digits = digits.zfill(4)
         return f"{digits[0:2]}:{digits[2:4]}"
     return value
@@ -808,8 +830,9 @@ class HamRadioLogger(tk.Tk):
         sent_coords = self.maidenhead_to_latlon(sent_grid)
         recv_coords = self.maidenhead_to_latlon(recv_grid)
         if sent_coords and recv_coords:
-            # Return rounded distance as integer
-            return round(geodesic(sent_coords, recv_coords).kilometers)
+            # Return rounded distance as integer, with a 1 km minimum so a
+            # contact within the same grid square still scores.
+            return max(1, round(geodesic(sent_coords, recv_coords).kilometers))
         return 0
 
     def calculate_distance_points(self, distance, frequency):
