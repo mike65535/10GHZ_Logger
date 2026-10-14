@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 import csv
+import os
+import sys
+from datetime import datetime
 from geopy.distance import geodesic
 import uuid
 
@@ -32,6 +35,123 @@ def normalize_time(value):
         digits = digits.zfill(4)
         return f"{digits[0:2]}:{digits[2:4]}"
     return value
+
+
+def ask_open_csv(parent, initialdir=None):
+    """Open-file dialog that lists each file's modified date/time and size.
+
+    Tk's built-in dialog on Linux has no details view, so build a simple one
+    with a Treeview. Windows and macOS native dialogs already show details.
+    """
+    if sys.platform in ("win32", "darwin"):
+        return filedialog.askopenfilename(
+            parent=parent, initialdir=initialdir, filetypes=[("CSV Files", "*.csv")]
+        )
+
+    dialog = tk.Toplevel(parent)
+    dialog.title("Open Log")
+    dialog.geometry("640x400")
+    dialog.transient(parent)
+    result = {"path": None}
+    state = {"dir": os.path.abspath(initialdir or os.getcwd()), "sort": ("modified", True)}
+
+    top = ttk.Frame(dialog, padding=(8, 8, 8, 0))
+    top.pack(fill=tk.X)
+    ttk.Button(top, text="Up", width=4, command=lambda: show(os.path.dirname(state["dir"]))).pack(side=tk.LEFT)
+    dir_label = ttk.Label(top, anchor="w")
+    dir_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 0))
+
+    body = ttk.Frame(dialog, padding=8)
+    body.pack(fill=tk.BOTH, expand=True)
+    tree = ttk.Treeview(body, columns=("modified", "size"), selectmode="browse")
+    scroll = ttk.Scrollbar(body, orient=tk.VERTICAL, command=tree.yview)
+    tree.configure(yscrollcommand=scroll.set)
+    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+    scroll.pack(side=tk.RIGHT, fill=tk.Y)
+    tree.column("#0", width=320)
+    tree.column("modified", width=160, anchor="w")
+    tree.column("size", width=90, anchor="e")
+    for column, heading in (("#0", "Name"), ("modified", "Modified"), ("size", "Size")):
+        tree.heading(column, text=heading, command=lambda c=column: sort_by(c))
+
+    def show(directory):
+        try:
+            names = os.listdir(directory)
+        except OSError as error:
+            messagebox.showerror("Open Log", str(error), parent=dialog)
+            return
+        state["dir"] = directory
+        dir_label.config(text=directory)
+        tree.delete(*tree.get_children())
+        rows = []
+        for name in names:
+            if name.startswith("."):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                info = os.stat(path)
+            except OSError:
+                continue
+            is_dir = os.path.isdir(path)
+            if not is_dir and not name.lower().endswith(".csv"):
+                continue
+            rows.append((is_dir, name, info.st_mtime, info.st_size))
+
+        column, descending = state["sort"]
+        sort_index = {"#0": 1, "modified": 2, "size": 3}[column]
+        rows.sort(
+            key=lambda row: row[1].lower() if sort_index == 1 else row[sort_index],
+            reverse=descending,
+        )
+        rows.sort(key=lambda row: not row[0])  # folders first, order kept within each group
+        for is_dir, name, mtime, size in rows:
+            tree.insert(
+                "",
+                tk.END,
+                iid=name,
+                text=f"{name}/" if is_dir else name,
+                values=(
+                    datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M"),
+                    "" if is_dir else f"{size / 1024:.1f} KB",
+                ),
+            )
+        children = tree.get_children()
+        first_file = next((iid for iid in children if not tree.item(iid, "text").endswith("/")), None)
+        if first_file:
+            tree.selection_set(first_file)
+            tree.focus(first_file)
+            tree.see(first_file)
+
+    def sort_by(column):
+        current, descending = state["sort"]
+        state["sort"] = (column, not descending if column == current else column != "#0")
+        show(state["dir"])
+
+    def accept(event=None):
+        selection = tree.selection()
+        if not selection:
+            return
+        path = os.path.join(state["dir"], selection[0])
+        if os.path.isdir(path):
+            show(path)
+        else:
+            result["path"] = path
+            dialog.destroy()
+
+    buttons = ttk.Frame(dialog, padding=(8, 0, 8, 8))
+    buttons.pack(fill=tk.X)
+    ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.RIGHT)
+    ttk.Button(buttons, text="Open", command=accept).pack(side=tk.RIGHT, padx=(0, 8))
+    tree.bind("<Double-1>", accept)
+    tree.bind("<Return>", accept)
+    dialog.bind("<Escape>", lambda event: dialog.destroy())
+
+    show(state["dir"])
+    dialog.wait_visibility()
+    dialog.grab_set()
+    tree.focus_set()
+    parent.wait_window(dialog)
+    return result["path"]
 
 
 class HamRadioLogger(tk.Tk):
@@ -76,7 +196,9 @@ class HamRadioLogger(tk.Tk):
         self.unsaved_changes = False
 
     def load_entries(self):
-        file_path = filedialog.askopenfilename(filetypes=[("CSV Files", "*.csv")])
+        file_path = ask_open_csv(
+            self, os.path.dirname(self.file_path) if self.file_path else None
+        )
         if file_path:
             self.file_path = file_path
             with open(file_path, "r") as file:
