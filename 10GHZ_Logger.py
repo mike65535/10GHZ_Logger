@@ -533,6 +533,10 @@ class HamRadioLogger(tk.Tk):
                 clipboard_text = widget.clipboard_get()
             except tk.TclError:
                 return
+            # A row copied from the history (tab-separated) fills the whole
+            # Add New Entry form instead of landing in a single field.
+            if "\t" in clipboard_text and self.fill_entry_form(widget, clipboard_text):
+                return
             try:
                 widget.delete("sel.first", "sel.last")
             except tk.TclError:
@@ -547,6 +551,29 @@ class HamRadioLogger(tk.Tk):
             widget.clipboard_append(selected_text)
             if action == "Cut":
                 widget.delete("sel.first", "sel.last")
+
+    def fill_entry_form(self, widget, clipboard_text):
+        # Only for the form's own fields (not the inline cell editor), and
+        # only when the first line has at least the 7 entered columns.
+        text_fields = (
+            self.date_entry,
+            self.time_entry,
+            self.callsign_entry,
+            self.sent_grid_entry,
+            self.recv_grid_entry,
+        )
+        fields = clipboard_text.strip("\n").split("\n")[0].split("\t")
+        if widget not in text_fields or len(fields) < 7:
+            return False
+
+        frequency, mode = fields[0].strip().upper(), fields[1].strip().upper()
+        for combo, value in ((self.frequency_entry, frequency), (self.mode_entry, mode)):
+            if value in combo["values"]:
+                combo.set(value)
+        for entry, value in zip(text_fields, fields[2:7]):
+            entry.delete(0, tk.END)
+            entry.insert(0, value.strip())
+        return True
 
     def send_entry_clipboard_event(self, action):
         self.clipboard_action(self.focus_get(), action)
