@@ -411,13 +411,21 @@ class HamRadioLogger(tk.Tk):
         self.total_frame = ttk.Frame(self, relief=tk.SUNKEN, borderwidth=2)
         self.total_frame.pack(fill=tk.X, padx=5, pady=5)
 
+        # First row: points and QSO counts
+        totals_row = ttk.Frame(self.total_frame)
+        totals_row.pack(side=tk.TOP, fill=tk.X)
+
         # Combined Total Points Label
-        self.total_points_label = ttk.Label(self.total_frame, text="Total Points: 0")
+        self.total_points_label = ttk.Label(totals_row, text="Total Points: 0")
         self.total_points_label.pack(side=tk.LEFT, padx=(10, 5))
 
         # QSO count, total and per band
-        self.qso_counts_label = ttk.Label(self.total_frame, text="")
+        self.qso_counts_label = ttk.Label(totals_row, text="")
         self.qso_counts_label.pack(side=tk.LEFT, padx=(20, 5))
+
+        # Second row: longest distance worked on each band
+        self.longest_label = ttk.Label(self.total_frame, text="Longest: none yet")
+        self.longest_label.pack(side=tk.TOP, anchor="w", padx=(10, 5))
 
         # Total Distance Points Label
 
@@ -480,6 +488,24 @@ class HamRadioLogger(tk.Tk):
         )
 
         self.update_qso_counts()
+        self.update_longest_distances()
+
+    def update_longest_distances(self):
+        # Longest contact per band, listed in FREQUENCY_MULTIPLIERS order and
+        # only for bands that have at least one contact.
+        longest = {}
+        for entry in self.entries:
+            band = entry["frequency"]
+            distance = float(entry["distance"] or 0)
+            if band not in longest or distance > longest[band][0]:
+                longest[band] = (distance, entry["callsign"])
+
+        bands = [band for band in FREQUENCY_MULTIPLIERS if band in longest]
+        bands += sorted(band for band in longest if band not in FREQUENCY_MULTIPLIERS)
+        summary = "   ".join(
+            f"{band}: {int(longest[band][0])} km ({longest[band][1]})" for band in bands
+        )
+        self.longest_label.config(text=f"Longest:  {summary or 'none yet'}")
 
     def update_qso_counts(self):
         tracked_bands = ("10G", "24G", "47G", "75G")
