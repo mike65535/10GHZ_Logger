@@ -21,11 +21,10 @@ FREQUENCY_MULTIPLIERS = {
     "LIGHT": 5,
 }
 
-MODE_OPTIONS = ["CW", "SSB", "FM", "DIG"]
-
-# Cabrillo export: the log's band names already are Cabrillo band codes;
-# modes map to Cabrillo's own codes.
-CABRILLO_MODES = {"CW": "CW", "SSB": "PH", "FM": "FM", "DIG": "DG"}
+# Band names and modes use the Cabrillo codes directly, so the log can be
+# exported as-is. Older logs used SSB/DIG; those are converted on load.
+MODE_OPTIONS = ["CW", "PH", "FM", "DG"]
+LEGACY_MODES = {"SSB": "PH", "DIG": "DG"}
 CABRILLO_SETTINGS_PATH = os.path.expanduser("~/.config/10ghz_logger/cabrillo.json")
 
 
@@ -48,7 +47,13 @@ def normalize_date(value):
     return value
 
 
+def normalize_mode(value):
+    mode = value.strip().upper()
+    return LEGACY_MODES.get(mode, mode)
+
+
 def normalize_time(value):
+    # Times are stored as Cabrillo-style HHMM.
     # "1:23" / "12:3": split on the separator and zero-pad each part.
     # "123" / "1234" / "12 34": strip separators and pad to 4 digits.
     text = value.strip()
@@ -57,12 +62,68 @@ def normalize_time(value):
         len(parts) == 2
         and all(part.isdigit() and 1 <= len(part) <= 2 for part in parts)
     ):
-        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}"
+        return parts[0].zfill(2) + parts[1].zfill(2)
     digits = re.sub(r"[:. ]", "", text)
     if digits.isdigit() and len(digits) in (3, 4):
-        digits = digits.zfill(4)
-        return f"{digits[0:2]}:{digits[2:4]}"
+        return digits.zfill(4)
     return value
+
+
+LOG_FIELDS = [
+    "frequency",
+    "mode",
+    "date",
+    "time",
+    "callsign",
+    "sent_grid",
+    "recv_grid",
+    "distance",
+    "distance_points",
+    "unique",
+    "dupe",
+]
+REQUIRED_LOG_FIELDS = LOG_FIELDS[:7]
+
+
+def read_log_file(file_path):
+    """Read a log CSV, tolerating files mangled by hand or by a spreadsheet.
+
+    The separator (comma, tab or space) is taken from the header line, and
+    columns are matched by name, so reordered or missing derived columns are
+    fine. Returns (entries, repaired) where repaired is True if the file was
+    not a normal comma-separated log. Raises ValueError if a required column
+    is missing.
+    """
+    with open(file_path, "r", newline="") as file:
+        lines = [line for line in file.read().splitlines() if line.strip()]
+    if not lines:
+        return [], False
+
+    header_line = lines[0]
+    if "," in header_line:
+        delimiter = ","
+    elif "\t" in header_line:
+        delimiter = "\t"
+    else:
+        # Space-separated: an empty field shows up as a double space, so
+        # split on single spaces to keep every column in its place.
+        delimiter = " "
+    rows = list(csv.reader(lines, delimiter=delimiter))
+    header = [name.strip().lower() for name in rows[0]]
+
+    missing = [name for name in REQUIRED_LOG_FIELDS if name not in header]
+    if missing:
+        raise ValueError("Missing column(s): " + ", ".join(missing))
+
+    entries = []
+    for row in rows[1:]:
+        values = dict(zip(header, (value.strip() for value in row)))
+        # Always build entries in the standard column order so saving writes
+        # a clean, normal log regardless of how this file was laid out.
+        entries.append({name: values.get(name, "") for name in LOG_FIELDS})
+
+    repaired = delimiter != "," or header[:7] != REQUIRED_LOG_FIELDS
+    return entries, repaired
 
 
 def ask_open_csv(parent, initialdir=None):
@@ -230,10 +291,21 @@ class HamRadioLogger(tk.Tk):
             self, os.path.dirname(self.file_path) if self.file_path else None
         )
         if file_path:
+            try:
+                entries, repaired = read_log_file(file_path)
+            except (OSError, ValueError, csv.Error) as error:
+                messagebox.showerror("Load", f"Couldn't read {file_path}:\n{error}")
+                return
             self.file_path = file_path
-            with open(file_path, "r") as file:
-                reader = csv.DictReader(file)
-                self.entries = [row for row in reader]
+            self.entries = entries
+            self.unsaved_changes = repaired
+            if repaired:
+                messagebox.showinfo(
+                    "Load",
+                    "This file wasn't a normal comma-separated log (wrong "
+                    "separator or column order), so it was repaired while "
+                    "loading.\n\nSave to write it back as a clean CSV.",
+                )
 
         self.recalculate_log()
 
@@ -282,9 +354,9 @@ class HamRadioLogger(tk.Tk):
             lines.append(
                 "QSO: {:<5} {:<2} {} {:>4} {:<13} {:<6} {:<13} {:<6}".format(
                     entry["frequency"],
-                    CABRILLO_MODES.get(entry["mode"], entry["mode"]),
+                    entry["mode"],
                     entry["date"],
-                    entry["time"].replace(":", ""),
+                    entry["time"],
                     callsign,
                     entry["sent_grid"],
                     entry["callsign"],
@@ -387,7 +459,7 @@ class HamRadioLogger(tk.Tk):
         # inconsistently-formatted dates/times sort incorrectly.
         for entry in self.entries:
             entry["frequency"] = entry["frequency"].upper()
-            entry["mode"] = entry["mode"].upper()
+            entry["mode"] = normalize_mode(entry["mode"])
             entry["callsign"] = entry["callsign"].upper()
             entry["sent_grid"] = entry["sent_grid"].upper()
             entry["recv_grid"] = entry["recv_grid"].upper()
@@ -544,7 +616,7 @@ class HamRadioLogger(tk.Tk):
         )
         self.mode_entry = self.create_dropdown(self.entry_frame, "Mode", MODE_OPTIONS)
         self.date_entry = self.create_entry(self.entry_frame, "Date (YYYY-MM-DD)")
-        self.time_entry = self.create_entry(self.entry_frame, "Time (HH:MM)")
+        self.time_entry = self.create_entry(self.entry_frame, "Time (HHMM)")
         self.callsign_entry = self.create_entry(self.entry_frame, "Callsign")
         self.sent_grid_entry = self.create_entry(self.entry_frame, "Sent Grid")
         self.recv_grid_entry = self.create_entry(self.entry_frame, "Rcvd Grid")
@@ -737,7 +809,7 @@ class HamRadioLogger(tk.Tk):
         if widget not in text_fields or len(fields) < 7:
             return False
 
-        frequency, mode = fields[0].strip().upper(), fields[1].strip().upper()
+        frequency, mode = fields[0].strip().upper(), normalize_mode(fields[1])
         for combo, value in ((self.frequency_entry, frequency), (self.mode_entry, mode)):
             if value in combo["values"]:
                 combo.set(value)
@@ -861,7 +933,7 @@ class HamRadioLogger(tk.Tk):
                 {
                     "id": str(uuid.uuid4()),
                     "frequency": frequency,
-                    "mode": mode.upper(),
+                    "mode": normalize_mode(mode),
                     "date": normalize_date(date.upper()),
                     "time": normalize_time(time.upper()),
                     "callsign": callsign.upper(),
@@ -907,7 +979,7 @@ class HamRadioLogger(tk.Tk):
         frequency = self.frequency_entry.get()
 
         # Auto-correct missing punctuation (e.g. "20261011" -> "2026-10-11",
-        # "1234" -> "12:34") and capitalization, and reflect the corrections
+        # "12:34" -> "1234") and capitalization, and reflect the corrections
         # back in the fields that stay filled in for the next entry.
         date_value = normalize_date(self.date_entry.get().upper())
         time_value = normalize_time(self.time_entry.get().upper())
