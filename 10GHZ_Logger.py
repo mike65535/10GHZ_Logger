@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import textwrap
 from datetime import datetime
 from geopy.distance import geodesic
 import uuid
@@ -349,6 +350,9 @@ class HamRadioLogger(tk.Tk):
             if header[key]:
                 lines.append(f"{tag}: {header[key]}")
         lines += [f"ADDRESS: {line}" for line in header["address"].splitlines() if line.strip()]
+        for paragraph in header["soapbox"].splitlines():
+            for line in textwrap.wrap(paragraph, 70):
+                lines.append(f"SOAPBOX: {line}")
         lines.append("CREATED-BY: 10GHZ_Logger")
         for entry in self.entries:
             lines.append(
@@ -382,6 +386,7 @@ class HamRadioLogger(tk.Tk):
             "name": "",
             "email": "",
             "address": "",
+            "soapbox": "",
         }
         try:
             with open(CABRILLO_SETTINGS_PATH) as file:
@@ -418,6 +423,10 @@ class HamRadioLogger(tk.Tk):
         address = tk.Text(form, width=32, height=3)
         address.insert("1.0", settings["address"])
         address.grid(row=len(fields), column=1, sticky="we", pady=2)
+        ttk.Label(form, text="Soapbox").grid(row=len(fields) + 1, column=0, sticky="nw", pady=2)
+        soapbox = tk.Text(form, width=32, height=5, wrap="word")
+        soapbox.insert("1.0", settings["soapbox"])
+        soapbox.grid(row=len(fields) + 1, column=1, sticky="we", pady=2)
 
         result = {}
 
@@ -427,6 +436,7 @@ class HamRadioLogger(tk.Tk):
             values["operators"] = values["operators"].upper()
             values["location"] = values["location"].upper()
             values["address"] = address.get("1.0", tk.END).strip()
+            values["soapbox"] = soapbox.get("1.0", tk.END).strip()
             if not values["callsign"]:
                 messagebox.showwarning("Export Cabrillo", "Callsign is required.", parent=dialog)
                 return
@@ -440,7 +450,7 @@ class HamRadioLogger(tk.Tk):
             dialog.destroy()
 
         buttons = ttk.Frame(form)
-        buttons.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        buttons.grid(row=len(fields) + 2, column=0, columnspan=2, sticky="e", pady=(8, 0))
         ttk.Button(buttons, text="Next...", command=accept).pack(side=tk.LEFT, padx=(0, 8))
         ttk.Button(buttons, text="Cancel", command=dialog.destroy).pack(side=tk.LEFT)
         dialog.bind("<Escape>", lambda event: dialog.destroy())
