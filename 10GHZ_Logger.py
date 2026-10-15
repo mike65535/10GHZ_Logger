@@ -474,6 +474,8 @@ class HamRadioLogger(tk.Tk):
             "-" * 24,
             f"{'Total':<6} {sum(band_unique.values()):>6} "
             f"{int(sum(band_points.values())):>10}",
+            "",
+            f"Total score (km points + 100 x uniques): {int(self.total_points())}",
         ]
 
         written = []
