@@ -450,9 +450,36 @@ class HamRadioLogger(tk.Tk):
                 )
             longest_lines.append("")
 
+        # Unique calls and distance points (km x band multiplier) per band.
+        # Dupes already carry zero distance points.
+        band_unique = {}
+        band_points = {}
+        for band in bands:
+            band_unique[band] = sum(
+                1 for entry in by_band[band] if entry["unique"] == "100"
+            )
+            band_points[band] = sum(
+                float(entry["distance_points"] or 0) for entry in by_band[band]
+            )
+        totals_lines = [
+            "Unique calls and km points by band",
+            "",
+            f"{'Band':<6} {'Unique':>6} {'km Points':>10}",
+        ]
+        totals_lines += [
+            f"{band:<6} {band_unique[band]:>6} {int(band_points[band]):>10}"
+            for band in bands
+        ]
+        totals_lines += [
+            "-" * 24,
+            f"{'Total':<6} {sum(band_unique.values()):>6} "
+            f"{int(sum(band_points.values())):>10}",
+        ]
+
         written = []
         for suffix, lines in (
             ("qsos-by-band", qso_lines),
+            ("3830-scores-page", totals_lines),
             ("most-worked", worked_lines),
             ("unique-calls", single_lines),
             ("longest-by-band", longest_lines),
@@ -1222,17 +1249,20 @@ class HamRadioLogger(tk.Tk):
             return None
         locator = locator.upper()
 
+        # South-west corner of the 4-character square.
         lon = (ord(locator[0]) - ord("A")) * 20 - 180
         lon += int(locator[2]) * 2
-        lon += 1
-        if len(locator) >= 6:
-            lon += (ord(locator[4]) - ord("A")) * 5 / 60
-
         lat = (ord(locator[1]) - ord("A")) * 10 - 90
         lat += int(locator[3])
-        lat += 0.5
+
+        # Then the centre of the smallest square given: the subsquare for a
+        # 6-character locator, otherwise the 4-character square.
         if len(locator) >= 6:
-            lat += (ord(locator[5]) - ord("A")) * 2.5 / 60
+            lon += (ord(locator[4]) - ord("A")) * 5 / 60 + 2.5 / 60
+            lat += (ord(locator[5]) - ord("A")) * 2.5 / 60 + 1.25 / 60
+        else:
+            lon += 1
+            lat += 0.5
 
         return lat, lon
 
