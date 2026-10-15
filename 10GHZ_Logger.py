@@ -16,16 +16,17 @@ FREQUENCY_MULTIPLIERS = {
     "24G": 2,
     "47G": 3,
     "75G": 4,
-    "122G": 5,
+    "123G": 5,
     "134G": 5,
     "241G": 5,
     "LIGHT": 5,
 }
 
 # Band names and modes use the Cabrillo codes directly, so the log can be
-# exported as-is. Older logs used SSB/DIG; those are converted on load.
+# exported as-is. Older logs used SSB/DIG and 122G; those are converted on load.
 MODE_OPTIONS = ["CW", "PH", "FM", "DG"]
 LEGACY_MODES = {"SSB": "PH", "DIG": "DG"}
+LEGACY_BANDS = {"122G": "123G"}
 CABRILLO_SETTINGS_PATH = os.path.expanduser("~/.config/10ghz_logger/cabrillo.json")
 
 
@@ -46,6 +47,11 @@ def normalize_date(value):
     if digits.isdigit() and len(digits) == 8:
         return f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]}"
     return value
+
+
+def normalize_band(value):
+    band = value.strip().upper()
+    return LEGACY_BANDS.get(band, band)
 
 
 def normalize_mode(value):
@@ -587,7 +593,7 @@ class HamRadioLogger(tk.Tk):
         # this has to happen before the chronological sort below, otherwise
         # inconsistently-formatted dates/times sort incorrectly.
         for entry in self.entries:
-            entry["frequency"] = entry["frequency"].upper()
+            entry["frequency"] = normalize_band(entry["frequency"])
             entry["mode"] = normalize_mode(entry["mode"])
             entry["callsign"] = entry["callsign"].upper()
             entry["sent_grid"] = entry["sent_grid"].upper()
@@ -938,7 +944,7 @@ class HamRadioLogger(tk.Tk):
         if widget not in text_fields or len(fields) < 7:
             return False
 
-        frequency, mode = fields[0].strip().upper(), normalize_mode(fields[1])
+        frequency, mode = normalize_band(fields[0]), normalize_mode(fields[1])
         for combo, value in ((self.frequency_entry, frequency), (self.mode_entry, mode)):
             if value in combo["values"]:
                 combo.set(value)
@@ -1061,7 +1067,7 @@ class HamRadioLogger(tk.Tk):
             self.entries.append(
                 {
                     "id": str(uuid.uuid4()),
-                    "frequency": frequency,
+                    "frequency": normalize_band(frequency),
                     "mode": normalize_mode(mode),
                     "date": normalize_date(date.upper()),
                     "time": normalize_time(time.upper()),
