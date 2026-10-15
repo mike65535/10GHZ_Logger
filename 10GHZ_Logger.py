@@ -86,6 +86,14 @@ LOG_FIELDS = [
 REQUIRED_LOG_FIELDS = LOG_FIELDS[:7]
 
 
+def ordered_bands(bands):
+    # Bands in FREQUENCY_MULTIPLIERS order, then any unknown bands alphabetically.
+    bands = set(bands)
+    return [band for band in FREQUENCY_MULTIPLIERS if band in bands] + sorted(
+        band for band in bands if band not in FREQUENCY_MULTIPLIERS
+    )
+
+
 def read_log_file(file_path):
     """Read a log CSV, tolerating files mangled by hand or by a spreadsheet.
 
@@ -375,6 +383,88 @@ class HamRadioLogger(tk.Tk):
             "Export Cabrillo", f"Wrote {len(self.entries)} QSOs to\n{file_path}"
         )
 
+    def generate_stats(self):
+        if not self.entries:
+            messagebox.showinfo("Generate Stats", "The log is empty.")
+            return
+        directory = filedialog.askdirectory(
+            title="Folder for stats files",
+            initialdir=os.path.dirname(self.file_path) if self.file_path else None,
+        )
+        if not directory:
+            return
+
+        # Make sure entries are normalized, chronological and scored.
+        self.recalculate_log()
+        base = (
+            os.path.splitext(os.path.basename(self.file_path))[0]
+            if self.file_path
+            else "log"
+        )
+        by_band = {}
+        for entry in self.entries:
+            by_band.setdefault(entry["frequency"], []).append(entry)
+        bands = ordered_bands(by_band)
+        call_counts = {}
+        for entry in self.entries:
+            call_counts[entry["callsign"]] = call_counts.get(entry["callsign"], 0) + 1
+
+        # QSO totals by band, like the totals banner.
+        qso_lines = ["QSOs by band", ""]
+        qso_lines += [f"{band:<6} {len(by_band[band]):>4}" for band in bands]
+        unique_count = sum(1 for entry in self.entries if entry["unique"] == "100")
+        qso_lines += [
+            "-" * 11,
+            f"{'Total':<6} {len(self.entries):>4}",
+            "",
+            f"Uniques: {unique_count}",
+        ]
+
+        # Most worked callsigns, every band combined.
+        most_worked = sorted(call_counts.items(), key=lambda item: (-item[1], item[0]))
+        worked_lines = ["Most worked callsigns (all bands)", ""]
+        worked_lines += [f"{call:<12} {count:>4}" for call, count in most_worked]
+
+        # Calls that appear exactly once in the whole log.
+        single_calls = sorted(call for call, count in call_counts.items() if count == 1)
+        single_lines = [
+            f"Callsigns appearing only once in the log ({len(single_calls)})",
+            "",
+        ] + single_calls
+
+        # Top three longest contacts per band (dupes would just repeat the
+        # original contact's distance, so they're skipped).
+        longest_lines = ["Longest QSOs by band (top 3)", ""]
+        for band in bands:
+            contacts = sorted(
+                (entry for entry in by_band[band] if not entry.get("dupe")),
+                key=lambda entry: float(entry["distance"] or 0),
+                reverse=True,
+            )[:3]
+            longest_lines.append(band)
+            for rank, entry in enumerate(contacts, 1):
+                longest_lines.append(
+                    f"  {rank}. {entry['callsign']:<12} {int(entry['distance']):>5} km  "
+                    f"{entry['sent_grid']} -> {entry['recv_grid']}  "
+                    f"{entry['date']} {entry['time']}"
+                )
+            longest_lines.append("")
+
+        written = []
+        for suffix, lines in (
+            ("qsos-by-band", qso_lines),
+            ("most-worked", worked_lines),
+            ("unique-calls", single_lines),
+            ("longest-by-band", longest_lines),
+        ):
+            path = os.path.join(directory, f"{base}-{suffix}.txt")
+            with open(path, "w") as file:
+                file.write("\n".join(lines).rstrip() + "\n")
+            written.append(os.path.basename(path))
+        messagebox.showinfo(
+            "Generate Stats", f"Wrote to {directory}:\n" + "\n".join(written)
+        )
+
     def ask_cabrillo_header(self):
         # Header fields, remembered between exports in CABRILLO_SETTINGS_PATH.
         settings = {
@@ -523,6 +613,7 @@ class HamRadioLogger(tk.Tk):
         file_menu.add_command(label="Save As...", command=self.save_entries_as)
         file_menu.add_command(label="Load", command=self.load_entries)
         file_menu.add_command(label="Export Cabrillo...", command=self.export_cabrillo)
+        file_menu.add_command(label="Generate Stats...", command=self.generate_stats)
         file_menu.add_separator()
         file_menu.add_command(label="Recalculate", command=self.recalculate_log)
         menu_bar.add_cascade(label="File", menu=file_menu)
@@ -727,8 +818,7 @@ class HamRadioLogger(tk.Tk):
             if band not in longest or distance > longest[band][0]:
                 longest[band] = (distance, entry["callsign"])
 
-        bands = [band for band in FREQUENCY_MULTIPLIERS if band in longest]
-        bands += sorted(band for band in longest if band not in FREQUENCY_MULTIPLIERS)
+        bands = ordered_bands(longest)
         summary = "   ".join(
             f"{band}: {int(longest[band][0])} km ({longest[band][1]})" for band in bands
         )
